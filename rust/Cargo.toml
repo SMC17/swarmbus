@@ -1,0 +1,9 @@
+[package]
+name = "swarmbus"
+version = "0.1.0"
+edition = "2021"
+description = "Zero-dependency Rust FFI & shared-memory mmap client for SMC17/swarmbus"
+
+[lib]
+name = "swarmbus"
+path = "src/lib.rs"
