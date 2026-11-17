@@ -30,20 +30,27 @@ pub const ShmSwarmBus = struct {
     hdr: *ShmHeader,
 
     pub fn openOrCreate(path: []const u8) !ShmSwarmBus {
-        const fd = try std.posix.open(
+        const fd = try std.posix.openat(
+            std.posix.AT.FDCWD,
             path,
             .{ .ACCMODE = .RDWR, .CREAT = true },
             0o660,
         );
-        errdefer std.posix.close(fd);
+        errdefer _ = std.posix.system.close(fd);
 
         const total_size = @sizeOf(ShmHeader);
-        try std.posix.ftruncate(fd, total_size);
+        if (std.posix.errno(std.posix.system.ftruncate(fd, total_size)) != .SUCCESS) {
+            return error.FtruncateFailed;
+        }
 
+        const prot: std.posix.PROT = if (@typeInfo(std.posix.PROT) == .@"struct")
+            .{ .READ = true, .WRITE = true }
+        else
+            std.posix.PROT.READ | std.posix.PROT.WRITE;
         const mapped = try std.posix.mmap(
             null,
             total_size,
-            std.posix.PROT.READ | std.posix.PROT.WRITE,
+            prot,
             .{ .TYPE = .SHARED },
             fd,
             0,
@@ -67,7 +74,7 @@ pub const ShmSwarmBus = struct {
 
     pub fn close(self: *ShmSwarmBus) void {
         std.posix.munmap(self.mapped);
-        std.posix.close(self.fd);
+        _ = std.posix.system.close(self.fd);
     }
 
     /// Lock-free atomic CAS lease acquisition across OS processes.
@@ -168,7 +175,7 @@ test "ShmSwarmBus two independent mmap handles share atomic leases and CRDT clai
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const dir_path = try tmp.dir.realpathAlloc(alloc, ".");
+    const dir_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", alloc);
     defer alloc.free(dir_path);
     const shm_path = try std.fs.path.join(alloc, &.{ dir_path, "swarm.shm" });
     defer alloc.free(shm_path);

@@ -156,7 +156,7 @@ pub const Blackboard = struct {
             }
         }.lessThan);
 
-        var winners = std.ArrayListUnmanaged(u32){};
+        var winners = std.ArrayListUnmanaged(u32).empty;
         errdefer winners.deinit(allocator);
 
         var used_tokens: u32 = 0;
