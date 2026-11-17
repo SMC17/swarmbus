@@ -1,0 +1,2 @@
+# swarmbus
+> Lock-free cross-process POSIX mmap swarm bus, fenced resource leases, LWW-CRDT blackboard, and compute-budget auction scheduler in Zig 0.15.2.
