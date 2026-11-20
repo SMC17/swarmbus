@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Proof level | **unit-tested** (see [proof levels](https://github.com/SMC17/SMC17/blob/main/STANDARDS.md#proof-levels)) |
-| Last verified | 2026-11-17, fresh clone, macOS on Apple M2 Max, Zig 0.16.0 |
+| Last verified | 2026-11-19, fresh clone, macOS on Apple M2 Max, Zig 0.16.0 |
 | Command | `zig build test --summary all` |
 | Result | 4/4 tests passed |
 
