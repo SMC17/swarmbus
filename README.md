@@ -3,58 +3,69 @@
 **[Status](STATUS.md) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Issues](https://github.com/SMC17/swarmbus/issues)**
 
 A shared-memory table that lets separate processes take leases on named resources and publish
-small key/value claims, plus an in-process blackboard with a compute-budget auction. Zig 0.16,
-with Python and Rust readers of the same memory layout.
+small key/value claims, plus an in-process blackboard with a compute-budget auction. Zig 0.16.
+A read-only Python client and a read-only Rust client use the same memory layout.
 
-Status: **unit-tested** (4 tests). This is a prototype with **known correctness defects**. Do
-not use it to coordinate anything that matters until they are fixed.
+Status: **unit-tested** (8 Zig tests, a Python self-test and 2 Rust tests, including a
+4-thread lease race and a 3-writer/2-reader torn-read check). This is a prototype.
 
 ## What is in it
 
 | Part | What it does |
 | --- | --- |
-| `src/shm_swarm.zig` (`ShmSwarmBus`) | A file `mmap`ed `MAP_SHARED`, holding 64 fixed slots (64-byte key, 192-byte value). Leases are taken with a compare-and-swap on a per-slot lock word and carry a fencing number from a global counter. Claims are last-writer-wins by that counter. |
+| `src/shm_swarm.zig` (`ShmSwarmBus`) | A file `mmap`ed `MAP_SHARED` with 64 slots (layout v2). A key's slot is found by hash with linear probing, and slots only move forward (empty → initialising → ready), so two processes creating the same key always meet at the same slot. Writes hold a per-slot seqlock, and readers retry instead of seeing a half-written value. Leases and claims are separate slot kinds. Fencing tokens and claim order come from one 64-bit counter. |
 | `src/blackboard.zig` (`Blackboard`) | The same ideas in one process, on the heap: LWW claims with merge, leases with TTL, and a greedy compute-budget auction (bids ranked by utility per token). |
-| `src/main.zig` | CLI: `lease`, `claim`, `read`, `auction`, `bench`. |
-| `python/swarmbus.py`, `rust/` | Read and write the same `ShmHeader` layout from Python (`mmap`) and Rust. |
+| `src/main.zig` | CLI: `lease`, `release`, `claim`, `read`, `auction`, `bench`. |
+| `python/swarmbus.py` | Reads claims and leases directly with the seqlock protocol. Writes go through the `swarmbus` binary, because Python has no atomic compare-and-swap. |
+| `rust/` | Read-only client with a bit-exact Wyhash port. Its test reads a file written by the Zig binary. |
 
-## Known defects
+## Limits
 
-- **A lease overwrites an unrelated claim.** Lease acquisition reuses any slot whose lock word
-  is zero, including slots holding claims. Reproduced in a single process:
-  [#2](https://github.com/SMC17/swarmbus/issues/2).
-- **Found by code review, not reproduced**
-  ([#3](https://github.com/SMC17/swarmbus/issues/3)):
-  - A new slot's key is written *after* its lock CAS, so two processes may both be granted
-    the same lease. 0 occurrences in 20,000 two-thread trials, but nothing rules it out.
-  - Claim writes are not atomic, so readers can see torn values and concurrent writers can
-    lose updates. Under concurrency the shared-memory claims are not a CRDT.
-  - Fencing numbers are truncated to 32 bits inside the lock word.
-- 64 slots in total, shared by leases and claims. Keys longer than 64 bytes and values longer
-  than 192 bytes are silently truncated.
-- Nothing cleans up a crashed holder's slot except TTL expiry checked by the next acquirer.
+- 64 slots, never freed. Releasing a lease clears its owner but keeps its key.
+- Keys are 1–64 bytes and values at most 192 bytes. Longer input is an error, not truncated.
+- A process that dies *inside* a write (tens of nanoseconds) leaves that slot locked until the
+  file is recreated.
+- Lease expiry uses the wall-clock time the caller passes in, so all participants need
+  roughly synchronised clocks.
+- v1 files (before 2026-11-19) are refused (`error.WrongLayout`). Delete them and start again.
+
+Fixed on 2026-11-19: a lease could overwrite an unrelated claim
+([#2](https://github.com/SMC17/swarmbus/issues/2)); a race could grant one lease to two agents,
+claims could be torn, fencing tokens were cut to 32 bits, keys were matched by prefix in Rust,
+and the bench did not measure shared memory ([#3](https://github.com/SMC17/swarmbus/issues/3)).
+The regression tests fail on the old protocol: removing the claim lock makes the torn-read
+test report 2,476 torn reads.
 
 ## Build
 
 ```sh
 # Zig 0.16.0
-zig build test --summary all       # 4/4
+zig build test --summary all       # 8/8
 zig build -Doptimize=ReleaseFast
-./zig-out/bin/swarmbus lease /tmp/swarm.shm 1 src/main.zig 5000
-./zig-out/bin/swarmbus claim /tmp/swarm.shm 1 ci:status green
-./zig-out/bin/swarmbus read  /tmp/swarm.shm ci:status
+./zig-out/bin/swarmbus lease   /tmp/swarm.shm 1 deploy 5000    # {"acquired":true,"fencing_token":1}
+./zig-out/bin/swarmbus lease   /tmp/swarm.shm 2 deploy 5000    # {"acquired":false}
+./zig-out/bin/swarmbus release /tmp/swarm.shm 1 deploy
+./zig-out/bin/swarmbus claim   /tmp/swarm.shm 1 ci:status green
+./zig-out/bin/swarmbus read    /tmp/swarm.shm ci:status        # green (exit 1 if absent)
+python3 python/swarmbus.py --self-test
+cargo test --manifest-path rust/Cargo.toml
 ./zig-out/bin/swarmbus bench
 ```
 
 ## Measured
 
-Apple M2 Max, macOS 26.4, Zig 0.16.0 ReleaseFast, commit `e22d3c0`, 2026-11-19:
-`swarmbus bench` reports 12–14 ns per `publishClaim` over 10,000 calls.
+Apple M2 Max, macOS 26.4, Zig 0.16.0 ReleaseFast, 2026-11-19, `swarmbus bench`, three runs:
 
-That number is for the **in-process** `Blackboard`, a heap hash map in one process. Nothing
-has measured cross-process latency through the shared-memory bus yet. Earlier versions of
-this README claimed "sub-microsecond shared-memory coordination across separate OS processes";
-that was never measured.
+| What | Workload | Result |
+| --- | --- | ---: |
+| In-process `Blackboard.publishClaim` | 10,000 calls, one process | 12–14 ns |
+| Shared-memory `publishClaim` | 100,000 calls, one process, no contention | 24–30 ns |
+| Shared-memory `readClaim` | 100,000 calls | 4–6 ns |
+| Shared-memory `tryAcquireLease` | 100,000 calls | ~50 ns |
+| **Cross-process round trip** | Parent publishes ping n, child process waits and publishes pong n; both busy-spin; 20,000 rounds | **410–835 ns** |
+
+The cross-process figure assumes both processes are spinning on their own cores. A process
+that sleeps or polls between reads adds that delay on top.
 
 ## License
 
