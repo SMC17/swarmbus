@@ -14,3 +14,6 @@ jobs:
           version: 0.16.0
       - run: zig build test
       - run: zig build -Doptimize=ReleaseFast
+      - run: zig build
+      - run: python3 python/swarmbus.py --self-test
+      - run: cargo test --manifest-path rust/Cargo.toml

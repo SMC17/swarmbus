@@ -2,7 +2,7 @@
 name = "swarmbus"
 version = "0.1.0"
 edition = "2021"
-description = "Zero-dependency Rust FFI & shared-memory mmap client for SMC17/swarmbus"
+description = "Read-only Rust client for the swarmbus shared-memory lease and claim table (layout v2)"
 
 [lib]
 name = "swarmbus"

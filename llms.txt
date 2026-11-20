@@ -1,9 +1,9 @@
 # swarmbus
-> Shared-memory lease and claim table for separate processes (mmap, 64 slots), plus an in-process blackboard and compute-budget auction, in Zig 0.16. Prototype with known concurrency defects.
+> Cross-process lease and claim table in a shared mmap file (layout v2: hash-placed slots, per-slot seqlock, 64-bit fencing), plus an in-process blackboard and compute-budget auction, in Zig 0.16. Read-only Python and Rust clients.
 
-- `swarmbus lease|claim|read <shm_path> ...`: fenced leases and last-writer-wins claims in a 64-slot shared-memory table.
+- `swarmbus lease|release|claim|read <shm_path> ...`: leases with fencing tokens and last-writer-wins claims; keys 1-64 bytes, values <= 192 bytes.
 - `swarmbus auction ...`: greedy compute-budget auction (utility per token).
-- `swarmbus bench`: in-process Blackboard claim latency only; cross-process latency is unmeasured.
-- Known defects: a lease can overwrite an unrelated claim (#2); duplicate lease holder and torn claims found by review (#3).
+- `swarmbus bench`: in-process, shared-memory and cross-process round trip (~0.4-0.8 us with both processes spinning, M2 Max).
+- `python/swarmbus.py`: seqlock reads; writes via the binary. `rust/`: read-only client.
 
 README.md is the source of truth, including measured numbers with hardware and commit.
